@@ -1,0 +1,43 @@
+<html>
+  <head>
+    <title>{{ $.Title }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.0/normalize.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/skeleton/2.0.4/skeleton.css">
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <h1>{{ $.Title }}</h1>
+      <div class="row">
+        <div class="four columns">
+          <h4><a class="button" href="/?date={{ $.PrevDate }}">{{ $.PrevDate }}</a></h4>
+        </div>
+        <div class="four columns" align="center">
+          <h4 class="button">{{ $.CurDate }}</h4>
+        </div>
+        <div class="four columns">
+          <h4><a class="button u-pull-right" href="/?date={{ $.NextDate }}">{{ $.NextDate }}</a></h4>
+        </div>
+      </div>
+      <table class="u-full-width">
+        <thead>
+          <tr>
+            <th>Best Position</th>
+            <th>Rating</th>
+            <th>Title</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{ range $.L }}
+            <tr>
+              <td>{{ .BestPosition}}</td>
+              <td>{{ printf "%.2f" .Rating }}</td>
+              <td><a target="_blank" href="{{ .Article.WebLink }}">{{ .Article.Title }}</a></td>
+            </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>
