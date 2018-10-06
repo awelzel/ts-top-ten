@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 )
 
 type Article struct {
@@ -44,7 +44,7 @@ func saveTopTen(articles []Article) (ok bool, err error) {
 		a := &articles[i]
 
 		// Lookup a DB object or create a new one...
-		query_stmt := "SELECT id FROM articles WHERE link = ?"
+		query_stmt := "SELECT id FROM articles WHERE link = $1"
 		rows, err := db.Query(query_stmt, a.Link)
 		defer rows.Close()
 
@@ -64,29 +64,20 @@ func saveTopTen(articles []Article) (ok bool, err error) {
 			continue
 		}
 
-		insert_stmt := `INSERT INTO articles (link, title) VALUES (?, ?)`
-		result, err := db.Exec(insert_stmt, a.Link, a.Title)
-		if err != nil {
+		insert_stmt := `INSERT INTO articles ("link", "title")
+				VALUES ($1, $2)
+				RETURNING id`
+		if err := db.QueryRow(insert_stmt, a.Link, a.Title).Scan(&a.Id); err != nil {
 			log.Printf("Insert Err: %v %v", err, err.Error())
 			return false, err
 		}
-		id, err := result.LastInsertId()
-		if err != nil {
-			log.Printf("LastInsertId Err: %v", err)
-			return false, err
-		}
-		a.Id = id
 	}
 
-	loc, err := time.LoadLocation("Europe/Berlin")
-	if err != nil {
-		log.Fatalf("Failed to load location: %v", err)
-	}
-	now := time.Now().In(loc)
+	now := time.Now().In(time.UTC)
 	for i, a := range articles {
 		position := i + 1
 		insert_stmt := `INSERT INTO top_ten_articles
-				(article_id, record_time, position) VALUES (?, ?, ?)`
+				(article_id, recorded_at, position) VALUES ($1, $2, $3)`
 		_, err := db.Exec(insert_stmt, a.Id, now, position)
 		if err != nil {
 			log.Printf("Insert Err: %v %v", err, err.Error())
@@ -99,17 +90,15 @@ func saveTopTen(articles []Article) (ok bool, err error) {
 func FetchArticles(start_date time.Time, end_date time.Time) (articles []ArticlePosition, err error) {
 	db := OpenDB()
 	defer db.Close()
-
 	stmt := `SELECT a.id, a.link, a.title,
 			min(tt.position) as min_position,
-			sum(1.0 / CONVERT(position, DECIMAL(3, 2))) as rating
+			sum(1.0 / pow(2, position - 1)) as rating
 			FROM articles a JOIN top_ten_articles tt
 			ON (a.id = tt.article_id)
-		 WHERE date(created_at) >= ? AND date(created_at) <= ?
+		 WHERE date(created_at) >= $1 AND date(created_at) <= $2
 		 GROUP BY date(a.created_at), a.id
 		 ORDER BY rating DESC, a.id
 		 `
-
 	rows, err := db.Query(stmt, start_date, end_date)
 	if err != nil {
 		return nil, err
@@ -130,19 +119,16 @@ func MustGetenv(key string) string {
 	if result := os.Getenv(key); result != "" {
 		return result
 	}
-	log.Fatalf("env var %s not set", key)
+	log.Fatalf("environment variable '%s' not set", key)
 	return "" // Unreached.
 }
 
 func OpenDB() *sql.DB {
 	var (
-		connString = MustGetenv("CLOUDSQL_CONNECTION_STRING")
-		user       = MustGetenv("CLOUDSQL_USER")
-		password   = os.Getenv("CLOUDSQL_PASSWORD")
+		driver     = MustGetenv("SQL_DRIVER")
+		connString = MustGetenv("SQL_CONNECTION_STRING")
 	)
-	connString = fmt.Sprintf("%s:%s@%s", user, password, connString)
-
-	db, err := sql.Open("mysql", connString)
+	db, err := sql.Open(driver, connString)
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %v", err)
 	}
@@ -153,22 +139,24 @@ func createDatabaseTables() {
 	db := OpenDB()
 	var err error
 	articles_stmt := `CREATE TABLE IF NOT EXISTS articles (
-		id INT AUTO_INCREMENT PRIMARY KEY,
+		id SERIAL,
 		link VARCHAR(255) NOT NULL UNIQUE,
 		title VARCHAR(255),
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		created_at TIMESTAMP DEFAULT NOW(),
+		PRIMARY KEY(id)
 	)`
 	_, err = db.Exec(articles_stmt)
 	if err != nil {
 		log.Fatalf("Failed to create tables: %v", err)
 	}
 	top_ten_stmt := `CREATE TABLE IF NOT EXISTS top_ten_articles  (
-		id int AUTO_INCREMENT PRIMARY KEY,
+		id SERIAL,
 		article_id INT,
-		record_time DATETIME NOT NULL,
+		recorded_at TIMESTAMP NOT NULL,
 		position INT NOT NULL,
+		PRIMARY KEY (id),
 		FOREIGN KEY (article_id) REFERENCES articles(id),
-		UNIQUE (article_id, record_time)
+		UNIQUE (article_id, recorded_at)
 	)`
 	_, err = db.Exec(top_ten_stmt)
 	if err != nil {

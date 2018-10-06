@@ -12,11 +12,13 @@ import (
 )
 
 func main() {
+	port := MustGetenv("PORT")
+	addr := fmt.Sprintf("127.0.0.1:%s", port)
 	http.HandleFunc("/", handle)
-	http.HandleFunc("/ts", handleTs)
-	http.HandleFunc("/_ah/health", healthCheckHandler)
-	log.Print("Listening on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	http.HandleFunc("/cron", handleCron)
+	http.HandleFunc("/check", handleCheck)
+	log.Printf("Listening on: %s", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 type PageVars struct {
@@ -73,9 +75,9 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	render_article_positions(w, date, articles)
 }
 
-func handleTs(w http.ResponseWriter, r *http.Request) {
+func handleCron(w http.ResponseWriter, r *http.Request) {
 
-	if r.Header.Get("X-Appengine-Cron") != "true" {
+	if r.Header.Get("X-Appengine-Cron") != "true" && r.Header.Get("X-Cron") != "true" {
 		http.Error(w, "non cron request", 403)
 		return
 	}
@@ -128,10 +130,13 @@ func handleTs(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := saveTopTen(slice); err != nil {
 		http.Error(w, "unable to store Top 10", 500)
+		return
 	}
-	fmt.Fprintf(w, "<html><body>DONE</body></html>")
+	fmt.Fprintf(w, "ok\n")
 }
 
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "ok")
+// XXX no escaping...
+func handleCheck(w http.ResponseWriter, r *http.Request) {
+	r.Header.Write(w)
+	fmt.Fprint(w, "ok\n")
 }
