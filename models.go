@@ -11,9 +11,11 @@ import (
 )
 
 type Article struct {
-	Link  string
-	Title string
-	Id    int64
+	Link        string
+	Title       string
+	Id          int64
+	Description string
+	ImageUrl    string
 }
 
 func MakeArticle(link string, title string) Article {
@@ -22,7 +24,7 @@ func MakeArticle(link string, title string) Article {
 }
 
 func (a Article) WebLink() string {
-	return fmt.Sprintf("http://www.tagesschau.de%s", a.Link)
+	return fmt.Sprintf("https://www.tagesschau.de%s", a.Link)
 }
 
 func (a Article) String() string {
@@ -35,7 +37,23 @@ type ArticlePosition struct {
 	Rating       float32
 }
 
-func saveTopTen(articles []Article) (ok bool, err error) {
+//XXX Work in batches!
+func SaveArticleDetails(a Article, og_description, og_image string) (ok bool, err error) {
+	db := OpenDB()
+	defer db.Close()
+	insert_stmt := `INSERT INTO article_details
+			(article_id, og_description, og_image)
+			VALUES ($1, $2, $3)`
+	_, err = db.Exec(insert_stmt, a.Id, og_description, og_image)
+	if err != nil {
+		log.Printf("Insert Err: %v %v", err, err.Error())
+		return false, err
+	}
+
+	return true, nil
+}
+
+func SaveTopTen(articles []Article) (ok bool, err error) {
 	db := OpenDB()
 	defer db.Close()
 
@@ -90,12 +108,12 @@ func saveTopTen(articles []Article) (ok bool, err error) {
 func FetchArticles(start_date time.Time, end_date time.Time) (articles []ArticlePosition, err error) {
 	db := OpenDB()
 	defer db.Close()
-	stmt := `SELECT a.id, a.link, a.title,
+	stmt := `SELECT a.id, a.link, a.title, max(ad.og_description), max(ad.og_image),
 			min(tt.position) as min_position,
 			sum(1.0 / pow(2, position - 1)) as rating
-			FROM articles a JOIN top_ten_articles tt
-			ON (a.id = tt.article_id)
-		 WHERE date(created_at) >= $1 AND date(created_at) <= $2
+			FROM articles a JOIN top_ten_articles tt ON (a.id = tt.article_id)
+			JOIN article_details ad ON (a.id = ad.article_id)
+		 WHERE date(a.created_at) >= $1 AND date(a.created_at) <= $2
 		 GROUP BY date(a.created_at), a.id
 		 ORDER BY rating DESC, a.id
 		 `
@@ -108,11 +126,29 @@ func FetchArticles(start_date time.Time, end_date time.Time) (articles []Article
 		ap := ArticlePosition{}
 		a := &ap.Article
 
-		rows.Scan(&a.Id, &a.Link, &a.Title, &ap.BestPosition, &ap.Rating)
+		rows.Scan(&a.Id, &a.Link, &a.Title, &a.Description, &a.ImageUrl, &ap.BestPosition, &ap.Rating)
 		articles = append(articles, ap)
 	}
 	return articles, nil
+}
 
+func FetchArticlesWithoutDetails() (articles []Article, err error) {
+
+	db := OpenDB()
+	defer db.Close()
+	stmt := `SELECT a.id, a.link, a.title
+		 FROM articles a LEFT JOIN article_details ad
+		 ON (a.id = ad.article_id) WHERE ad.id IS NULL`
+	rows, err := db.Query(stmt)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		a := Article{}
+		rows.Scan(&a.Id, &a.Link, &a.Title)
+		articles = append(articles, a)
+	}
+	return articles, nil
 }
 
 func MustGetenv(key string) string {
@@ -151,7 +187,7 @@ func createDatabaseTables() {
 	}
 	top_ten_stmt := `CREATE TABLE IF NOT EXISTS top_ten_articles  (
 		id SERIAL,
-		article_id INT,
+		article_id INT NOT NULL,
 		recorded_at TIMESTAMP NOT NULL,
 		position INT NOT NULL,
 		PRIMARY KEY (id),
@@ -159,6 +195,20 @@ func createDatabaseTables() {
 		UNIQUE (article_id, recorded_at)
 	)`
 	_, err = db.Exec(top_ten_stmt)
+	if err != nil {
+		log.Fatalf("Failed to create tables: %v", err)
+	}
+	article_details_stmt := `CREATE TABLE IF NOT EXISTS article_details  (
+		id SERIAL,
+		article_id INT NOT NULL,
+		created_at TIMESTAMP DEFAULT NOW(),
+		og_description VARCHAR(1024),
+		og_image VARCHAR(255),
+		PRIMARY KEY (id),
+		FOREIGN KEY (article_id) REFERENCES articles(id),
+		UNIQUE (article_id)
+	)`
+	_, err = db.Exec(article_details_stmt)
 	if err != nil {
 		log.Fatalf("Failed to create tables: %v", err)
 	}

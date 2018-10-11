@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	createDatabaseTables()
 	port := MustGetenv("PORT")
 	addr := fmt.Sprintf("127.0.0.1:%s", port)
 	http.HandleFunc("/", handle)
@@ -89,12 +90,12 @@ func handleCron(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	b, err := ioutil.ReadAll(resp.Body)
+	buf, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		http.Error(w, "reading http response failed", 500)
 		return
 	}
-	root := soup.HTMLParse(string(b))
+	root := soup.HTMLParse(string(buf))
 	h2s := root.FindAll("h2", "class", "conHeadline")
 
 	var top10 soup.Root
@@ -128,11 +129,39 @@ func handleCron(w http.ResponseWriter, r *http.Request) {
 		x := MakeArticle(href, title)
 		slice[i] = x
 	}
-	if _, err := saveTopTen(slice); err != nil {
+	if _, err := SaveTopTen(slice); err != nil {
 		http.Error(w, "unable to store Top 10", 500)
 		return
 	}
 	fmt.Fprintf(w, "ok\n")
+
+	fmt.Printf("Checking missing details...\n")
+	articles, err := FetchArticlesWithoutDetails()
+	if err != nil {
+		log.Printf("Error fetching articles without details: %v", err)
+		return
+	}
+	for _, a := range articles {
+		resp, err := http.Get(a.WebLink())
+		if err != nil {
+			log.Printf("WARN: could not fetch %s: %v\n", a, err)
+			continue
+		}
+		defer resp.Body.Close()
+		buf, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("WARN: read response error %s: %v\n", a, err)
+			continue
+		}
+		root := soup.HTMLParse(string(buf))
+
+		// FIXME: Loop, map, nicer!!! If one fails, all will fail?
+		// FIXME: Work in batches, not one at the time...
+		og_description := root.Find("meta", "property", "og:description").Attrs()["content"]
+		og_image := root.Find("meta", "property", "og:image").Attrs()["content"]
+		log.Printf("got for %s: %s %s\n", a, og_description, og_image)
+		SaveArticleDetails(a, og_description, og_image)
+	}
 }
 
 // XXX no escaping...
